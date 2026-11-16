@@ -2,7 +2,8 @@
 Tauchen.py
 
 Purpose:
-    Create a discretized grid and markov chain for a stochastic proces following an AR(1)
+    Discretise the persistent AR(1) component of log income and build the income distribution
+    over the life cycle.
 """
 ###########################################################
 ### Imports
@@ -13,155 +14,112 @@ from scipy.stats import norm
 ### Functions
 ###########################################################
 
-###########################################################
-### mMarkov, vZ = tauchen(dRho, dSigmaeps, iNumStates, iM)
-#@njit
+def rouwenhorst(dRho, dSigmaeps, iNumStates, time_increment):
+    """Returns the markov chain and grid of an AR(1) process using the Rouwenhorst method
+
+    The process is z' = dRho * z + eps, eps ~ N(0, dSigmaeps^2), with annual parameters.  Unlike
+    Tauchen, Rouwenhorst matches the unconditional variance and the autocorrelation exactly, also
+    for persistence close to one and few states (Kopecky & Suen 2010).  The annual transition
+    matrix is raised to the power time_increment for multi-year model periods.
+
+    Args:
+        dRho           (float): Persistence of the AR(1), annual
+        dSigmaeps      (float): Standard deviation of the error term, annual
+        iNumStates     (int):   Number of grid points
+        time_increment (int):   Years per model period
+
+    Returns:
+        mMarkov (matrix, float): Markov chain over one model period (rows: current state)
+        vZ      (vector, float): Grid, evenly spaced on +/- sd(z) * sqrt(iNumStates - 1)
+    """
+    p = (1 + dRho) / 2
+    mMarkov = np.array([[p, 1 - p], [1 - p, p]])
+    for n in range(3, iNumStates + 1):
+        mNew = np.zeros((n, n))
+        mNew[:-1, :-1] += p * mMarkov
+        mNew[:-1, 1:]  += (1 - p) * mMarkov
+        mNew[1:, :-1]  += (1 - p) * mMarkov
+        mNew[1:, 1:]   += p * mMarkov
+        mNew[1:-1, :]  /= 2                      # interior rows are counted twice
+        mMarkov = mNew
+
+    dSD_Z = dSigmaeps / np.sqrt(1 - dRho**2)
+    dZ_max = dSD_Z * np.sqrt(iNumStates - 1)
+    vZ = np.linspace(-dZ_max, dZ_max, iNumStates)
+
+    return np.linalg.matrix_power(mMarkov, time_increment), vZ
+
+
 def tauchen(dRho, dSigmaeps, iNumStates, iM, time_increment):
-    """Returns the markov chain and grid of an AR(1) proces using the Tauchen method
+    """Returns the markov chain and grid of an AR(1) process using the Tauchen method
+    (superseded by rouwenhorst, which is more accurate for persistence close to one)
 
     Args:
         dRho        (float): Persistence of the AR(1)
         dSigmaeps   (float): Standard deviation of the error term in the AR(1)
         iNumStates  (int):   Number of grid points for the discrete state space
-        iM          (in):    an integer that parameterizes the width of the state space
+        iM          (int):   Width of the grid in unconditional standard deviations
 
     Returns:
         mMarkov (matrix, float): Markov chain
-        vZ     (vector, float): Grid
+        vZ      (vector, float): Grid
     """
-    # Initialize
-    mMarkov = np.zeros(shape = (iNumStates, iNumStates), dtype = float)
-    
-    # Create the grid
     dSD_Z = np.sqrt(dSigmaeps**2 / (1 - dRho**2))
+    vZ = np.linspace(-iM * dSD_Z, iM * dSD_Z, iNumStates)
+    dDist = vZ[1] - vZ[0]
 
-    dZ_max = iM * dSD_Z
-    dZ_min = -dZ_max
-    
-    dDist = (dZ_max-dZ_min)/(iNumStates-1)
+    # Probability of landing in each interval around the grid points; outer intervals are open
+    vUpper = np.append(vZ[:-1] + 0.5 * dDist, np.inf)
+    vLower = np.append(-np.inf, vZ[1:] - 0.5 * dDist)
+    mMean = dRho * vZ[:, np.newaxis]
+    mMarkov = norm.cdf((vUpper - mMean) / dSigmaeps) - norm.cdf((vLower - mMean) / dSigmaeps)
 
-    vZ = np.linspace(dZ_min, dZ_max, iNumStates)
-    
-    # Fill the matrix
-    
-    for i in range(iNumStates):
-        for j in range(iNumStates):
-            if j == 0: # lowest state
-                mMarkov[i, j] = norm.cdf((vZ[j] - dRho * vZ[i] + 0.5 * dDist) / dSigmaeps)
-            elif j == iNumStates-1: # highest state
-                mMarkov[i, j] = 1 - norm.cdf((vZ[j] - dRho * vZ[i] - 0.5 * dDist) / dSigmaeps)
-            else: # interior states
-                upper_bound = (vZ[j] - dRho * vZ[i] + 0.5 * dDist) / dSigmaeps
-                lower_bound = (vZ[j] - dRho * vZ[i] - 0.5 * dDist) / dSigmaeps
-                mMarkov[i, j] = norm.cdf(upper_bound) - norm.cdf(lower_bound)
-                
-    mMarkov = np.linalg.matrix_power(mMarkov,time_increment)      
-      
-    return mMarkov, vZ
+    return np.linalg.matrix_power(mMarkov, time_increment), vZ
 
-def initial_dist(par, vE):   
-    vPi_E=np.zeros((vE.size))
-    dPi_cum=0
-    for i in range(par.iNumStates):
-        if i<par.iNumStates-1:
-            vPi_E[i]=norm.cdf((0.5*vE[i]+0.5*vE[i+1])/par.sd_income_initial)-dPi_cum
-            dPi_cum+=vPi_E[i]
-        else:
-            vPi_E[i]=1-dPi_cum
-    return vPi_E
+
+def initial_dist(par, vE):
+    """Distribution of entrants over the income states: N(0, sd_income_initial^2) binned at the
+    midpoints between grid points (outer bins open-ended)."""
+    vCdf = norm.cdf(0.5 * (vE[:-1] + vE[1:]) / par.sd_income_initial)
+    return np.diff(np.concatenate(([0.0], vCdf, [1.0])))
+
 
 def weight_matrix(par, vE, vPi_E, mMarkov):
-    mPi_E=np.zeros((par.iNj, vE.size))
-    mPi_E[0,:]=vPi_E
-    for j in range(1,par.j_ret):
-        for i in range(par.iNumStates):
-            for k in range(par.iNumStates): 
-                mPi_E[j,i]+=mPi_E[j-1,k]*mMarkov[k,i]
-    for j in range(par.j_ret, par.iNj):
-        mPi_E[j,:]=mPi_E[j-1,:]
+    """Distribution over income states by age: rolled forward with the Markov chain while working,
+    frozen after retirement."""
+    mPi_E = np.zeros((par.iNj, vE.size))
+    mPi_E[0, :] = vPi_E
+    for j in range(1, par.iNj):
+        mPi_E[j, :] = mPi_E[j - 1, :] @ mMarkov if j < par.j_ret else mPi_E[j - 1, :]
     return mPi_E
-    
 
-def lifecycle(par,J_ret):
-    
-    chi=np.zeros((J_ret))
-    for j in range(J_ret):
-        age=21+par.time_increment*j
-        chi[j]=par.beta0_age+par.beta1_age*age+par.beta2_age*age**2+par.beta3_age*age**3+par.beta4_age*age**4
-    
-    return chi 
+
+def lifecycle(par, J_ret):
+    """Age component of log income: fourth-order polynomial in age, for working-age periods."""
+    vAge = 21 + par.time_increment * np.arange(J_ret)
+    return (par.beta0_age + par.beta1_age * vAge + par.beta2_age * vAge**2
+            + par.beta3_age * vAge**3 + par.beta4_age * vAge**4)
+
 
 def median_inc(chi, z, z_dist):
-    
-    mIncome = np.zeros((chi.size, z.size))
-    mDens = np.zeros((chi.size,z.size))
-    
-    for j in range(chi.size):
-        for z_idx in range(z.size):
-            mIncome[j,z_idx] = np.exp(chi[j] + z[z_idx])
-            mDens[j,z_idx] = (1/chi.size * z_dist[j, z_idx])
-            
-    mIncome_flattened = mIncome.flatten()
-    mDens_flattened = mDens.flatten()
-    
-    sorted_indices = np.argsort(mIncome_flattened)
-    mIncome_sort = mIncome_flattened[sorted_indices]
-    mDens_sorted = mDens_flattened[sorted_indices]
-    
-    cumulative_density = np.cumsum(mDens_sorted) / np.sum(mDens_sorted)
-    
-    median = np.interp(0.5, cumulative_density, mIncome_sort)
-    
-    return median
+    """Median of pretax income across working ages (equal weight per age) and income states."""
+    vIncome = np.exp(chi[:, np.newaxis] + z[np.newaxis, :]).ravel()
+    vDens = (z_dist[:chi.size, :] / chi.size).ravel()
+
+    order = np.argsort(vIncome)
+    vCumDens = np.cumsum(vDens[order]) / np.sum(vDens)
+    return np.interp(0.5, vCumDens, vIncome[order])
+
 
 def invar_dist(mMarkov):
+    """Stationary distribution of a Markov chain."""
     evals, evecs = np.linalg.eig(mMarkov.T)
-    evec1 = (evecs[:,np.isclose(evals, 1)])[:,0]
-    vStationary_Y = evec1 / evec1.sum()
-    
-    return vStationary_Y
+    evec1 = (evecs[:, np.isclose(evals, 1)])[:, 0]
+    return evec1 / evec1.sum()
+
 
 def combine_vectors(vE, vE_trans, vE_stationary, vE_trans_stationary):
-    n1 = vE.size
-    n2 = vE_trans.size
-    total_size = n1 * n2
-
-    # Allocate result arrays
-    sum_vec = np.empty(total_size, dtype=np.float64)
-    prob_vec = np.empty(total_size, dtype=np.float64)
-
-    idx = 0
-    for i in range(n1):
-        for j in range(n2):
-            sum_vec[idx] = vE[i] + vE_trans[j]
-            prob_vec[idx] = vE_stationary[i] * vE_trans_stationary[j]
-            idx += 1
-
+    """Combine persistent and transitory states (all sums) and their probabilities (products)."""
+    sum_vec = (vE[:, np.newaxis] + vE_trans[np.newaxis, :]).ravel()
+    prob_vec = (vE_stationary[:, np.newaxis] * vE_trans_stationary[np.newaxis, :]).ravel()
     return sum_vec, prob_vec
-
-
-###########################################################
-### main#
-#def main():
-    # Magic numbers
-    
-    ## Income proces
-#    dRho = 0.96
-##    dSigmaeps = 0.12
-#    iNumStates = 5
-#    iM = 3
-#    J = 15
-
-    # Initialisation
-    
-    
-    # Estimation
-#    mMarkov, vZ = tauchen(dRho, dSigmaeps, iNumStates, iM)
-#    vStationary_Y = invar_dist(mMarkov)
-#    chi = lifecycle(J)
-#    median = median_inc(chi, vZ, vStationary_Y)
-
-###########################################################
-### start main
-#if __name__ == "__main__":
-#    main()
