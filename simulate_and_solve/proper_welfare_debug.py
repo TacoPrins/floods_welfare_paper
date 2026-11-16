@@ -48,7 +48,7 @@ def find_expenditure_equiv_EK_SLR(par, grids, vCoeff_C_initial, vCoeff_NC_initia
 
     for wf_idx in range(wf_loss.size):
         par.wf_wedge[0] = wf_loss[wf_idx]
-        _, _, _, _, _, _, v_owner_c_wf_SS, v_owner_nc_wf_SS, v_nonowner_wf_SS = household_problem.solve_ss(grids, par, vCoeff_C_initial[0], vCoeff_NC_initial[0], solve_initial_ss_)
+        _, _, _, _, _, _, v_owner_c_wf_SS, v_owner_nc_wf_SS, v_nonowner_wf_SS, _, _ = household_problem.solve_ss(grids, par, vCoeff_C_initial[0], vCoeff_NC_initial[0], solve_initial_ss_)
         v_nonowner_wf_expanded_SS=grid_adjust_rentshape(par,grids,v_nonowner_wf_SS)
         v_owner_c_wf_expanded_SS=grid_adjust(par,grids,v_owner_c_wf_SS)
         v_owner_nc_wf_expanded_SS=grid_adjust(par,grids,v_owner_nc_wf_SS)
@@ -260,7 +260,7 @@ def find_expenditure_equiv_EK_policy(par, grids, vCoeff_C_in, vCoeff_NC_in,vCoef
     wf_BR_pol_rent=np.zeros((k_dim,grids.vE.size))
     wf_BR_pol_newborns=np.zeros((grids.vTime.size,k_dim,grids.vE.size))   
     
-    _, _, _, _, _, _, v_owner_c_wf_MP, v_owner_nc_wf_MP, v_nonowner_wf_MP = household_problem.solve(grids, par, vCoeff_C_MP_in,vCoeff_NC_MP_in, config_MP)
+    _, _, _, _, _, _, v_owner_c_wf_MP, v_owner_nc_wf_MP, v_nonowner_wf_MP, _, _ = household_problem.solve(grids, par, vCoeff_C_MP_in,vCoeff_NC_MP_in, config_MP)
     v_owner_c_wf_expanded_MP=grid_adjust(par,grids,v_owner_c_wf_MP)
     del v_owner_c_wf_MP
     v_owner_nc_wf_expanded_MP=grid_adjust(par,grids,v_owner_nc_wf_MP)
@@ -284,7 +284,7 @@ def find_expenditure_equiv_EK_policy(par, grids, vCoeff_C_in, vCoeff_NC_in,vCoef
                 wf_MP_pol_newborns[t_index,k_index,e_index] = np.sum(newborn_dist[k_index,:,:,e_index] * v_nonowner_wf_expanded_MP[t_index,0,k_index, :, :,e_index])                
     del v_nonowner_wf_expanded_MP
 
-    _, _, _, _, _, _, v_owner_c_wf_BR, v_owner_nc_wf_BR, v_nonowner_wf_BR = household_problem.solve(grids, par, vCoeff_C_BR_in,vCoeff_NC_BR_in, config_BR)
+    _, _, _, _, _, _, v_owner_c_wf_BR, v_owner_nc_wf_BR, v_nonowner_wf_BR, _, _ = household_problem.solve(grids, par, vCoeff_C_BR_in,vCoeff_NC_BR_in, config_BR)
     v_owner_c_wf_expanded_BR=grid_adjust(par,grids,v_owner_c_wf_BR)
     del v_owner_c_wf_BR
     v_owner_nc_wf_expanded_BR=grid_adjust(par,grids,v_owner_nc_wf_BR)
@@ -312,7 +312,7 @@ def find_expenditure_equiv_EK_policy(par, grids, vCoeff_C_in, vCoeff_NC_in,vCoef
     
     for wf_idx in range(wf_loss.size):
         par.wf_wedge[0] = wf_loss[wf_idx]
-        _, _, _, _, _, _, v_owner_c_wf_BAU, v_owner_nc_wf_BAU, v_nonowner_wf_BAU = household_problem.solve(grids, par, vCoeff_C_in,vCoeff_NC_in, config_nopol)
+        _, _, _, _, _, _, v_owner_c_wf_BAU, v_owner_nc_wf_BAU, v_nonowner_wf_BAU, _, _ = household_problem.solve(grids, par, vCoeff_C_in,vCoeff_NC_in, config_nopol)
         v_owner_c_wf_expanded_BAU=grid_adjust(par,grids,v_owner_c_wf_BAU)
         del v_owner_c_wf_BAU
         for k_index in range(k_dim):

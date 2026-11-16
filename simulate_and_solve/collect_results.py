@@ -23,7 +23,7 @@ import misc_functions as misc
 import grid_creation as grid_creation
 import par_epsilons as parfile
 import coeff_io
-import create_plotting_inputs
+import create_plotting_inputs as create_plotting_inputs
 import pandas as pd
 
 WELFARE_NAMES = ["tax_equiv_C_RE", "tax_equiv_NC_RE", "tax_equiv_renter_RE", "tax_equiv_newborns_RE",
@@ -57,7 +57,7 @@ def collect_results(plot_distribution, calculate_welfare, only_RE_welfare=False)
     par = misc.construct_jitclass(parfile.par_dict)
     grids=grid_creation.create(par)
     cfg = unpack_configs.unpack(experiment_config, misc)
-
+    print("GO!")
     # load solved coefficients by label (written by solve_model.py)
     C = coeff_io.load_with_defaults()
     if not only_RE_welfare:                 # HE part, not needed for the RE-only update
@@ -66,10 +66,10 @@ def collect_results(plot_distribution, calculate_welfare, only_RE_welfare=False)
         dP_C_initial = lom.LoM(par,grids,0,C["vCoeff_C_initial_HE"])
         dP_NC_initial = lom.LoM(par,grids,0,C["vCoeff_NC_initial_HE"])
 
-        vt_stay_c, vt_stay_nc, vt_renter, b_stay_c, b_stay_nc, b_renter,_,_,_ = household_problem.solve_ss(grids, par, C["vCoeff_C_initial_HE"][0], C["vCoeff_NC_initial_HE"][0], cfg.solve_initial_ss_HE)
-        mDist1_c_SS, mDist1_nc_SS, mDist1_renter_SS, rental_stock_C0, rental_stock_NC0, coastal_beq0, noncoastal_beq0, savings_beq0, no_beq=sim.stat_dist_finder(par, grids, vt_stay_c[0,], vt_stay_nc[0,], vt_renter[0,], b_stay_c[0,], b_stay_nc[0,], b_renter[0,], C["vCoeff_C_initial_HE"],C["vCoeff_NC_initial_HE"], cfg.solve_initial_ss_HE)
+        vt_stay_c, vt_stay_nc, vt_renter, b_stay_c, b_stay_nc, b_renter,_,_,_, qm_c, qm_nc = household_problem.solve_ss(grids, par, C["vCoeff_C_initial_HE"][0], C["vCoeff_NC_initial_HE"][0], cfg.solve_initial_ss_HE)
+        mDist1_c_SS, mDist1_nc_SS, mDist1_renter_SS, rental_stock_C0, rental_stock_NC0, coastal_beq0, noncoastal_beq0, savings_beq0, no_beq=sim.stat_dist_finder(par, grids, vt_stay_c[0,], vt_stay_nc[0,], vt_renter[0,], b_stay_c[0,], b_stay_nc[0,], b_renter[0,], qm_c[0,], qm_nc[0,], C["vCoeff_C_initial_HE"],C["vCoeff_NC_initial_HE"], cfg.solve_initial_ss_HE)
     
-        del vt_stay_c, vt_stay_nc, vt_renter, b_stay_c, b_stay_nc, b_renter
+        del vt_stay_c, vt_stay_nc, vt_renter, b_stay_c, b_stay_nc, b_renter, qm_c, qm_nc
     
         "(2) baseline transition with sceptics"
         # run generate price path without experiments, with sceptics. save the (collapsed) distributions. Also save the 2026 distributions and welfare value functions
@@ -80,12 +80,11 @@ def collect_results(plot_distribution, calculate_welfare, only_RE_welfare=False)
             tax_equiv_C, tax_equiv_NC, tax_equiv_renter, tax_equiv_newborns, wf_SLR_newborns =  welfare_stats.find_expenditure_equiv_EK_SLR(par, grids, C["vCoeff_C_initial_HE"], C["vCoeff_NC_initial_HE"], C["vCoeff_C_HE"], C["vCoeff_NC_HE"], mDist1_c_SS, mDist1_nc_SS, mDist1_renter_SS,  vcoastal_beq, vnoncoastal_beq, vsavings_beq, v_owner_c_wf, v_owner_nc_wf, v_nonowner_wf, cfg.solve_initial_ss_HE, cfg.transition_path)
 
         del v_owner_c_wf, v_owner_nc_wf, v_nonowner_wf
-    
+    print("HE part done")
     "(3) baseline transition without sceptics (RE)"
-    vt_stay_c, vt_stay_nc, vt_renter, b_stay_c, b_stay_nc, b_renter,_,_,_ = household_problem.solve_ss(grids, par, C["vCoeff_C_initial_RE"][0], C["vCoeff_NC_initial_RE"][0], cfg.solve_initial_ss_RE)
-    mDist1_c_SS, mDist1_nc_SS, mDist1_renter_SS, rental_stock_C0, rental_stock_NC0, coastal_beq0, noncoastal_beq0, savings_beq0, no_beq=sim.stat_dist_finder(par, grids, vt_stay_c[0,], vt_stay_nc[0,], vt_renter[0,], b_stay_c[0,], b_stay_nc[0,], b_renter[0,], C["vCoeff_C_initial_RE"],C["vCoeff_NC_initial_RE"], cfg.solve_initial_ss_RE)
-    
-    del vt_stay_c, vt_stay_nc, vt_renter, b_stay_c, b_stay_nc, b_renter
+    vt_stay_c, vt_stay_nc, vt_renter, b_stay_c, b_stay_nc, b_renter,_,_,_, qm_c, qm_nc = household_problem.solve_ss(grids, par, C["vCoeff_C_initial_RE"][0], C["vCoeff_NC_initial_RE"][0], cfg.solve_initial_ss_RE)
+    mDist1_c_SS, mDist1_nc_SS, mDist1_renter_SS, rental_stock_C0, rental_stock_NC0, coastal_beq0, noncoastal_beq0, savings_beq0, no_beq=sim.stat_dist_finder(par, grids, vt_stay_c[0,], vt_stay_nc[0,], vt_renter[0,], b_stay_c[0,], b_stay_nc[0,], b_renter[0,], qm_c[0,], qm_nc[0,], C["vCoeff_C_initial_RE"],C["vCoeff_NC_initial_RE"], cfg.solve_initial_ss_RE)
+    del vt_stay_c, vt_stay_nc, vt_renter, b_stay_c, b_stay_nc, b_renter, qm_c, qm_nc
     
     # run generate price path without experiments, without sceptics. save the (collapsed) distributions and welfare value functions
     dP_C_initial_RE = lom.LoM(par,grids,0,C["vCoeff_C_initial_RE"])
@@ -114,6 +113,8 @@ def collect_results(plot_distribution, calculate_welfare, only_RE_welfare=False)
          vdefault_mass_C_RE, vdefault_mass_NC_RE),
         grids, "plotting_inputs.xlsx")
 
+    print('dist now plotted?')
+
     del full_dist_C_HE, full_dist_NC_HE, full_dist_renter_HE, full_dist_C_RE, full_dist_NC_RE, full_dist_renter_RE
     
 
@@ -126,12 +127,12 @@ def collect_results(plot_distribution, calculate_welfare, only_RE_welfare=False)
     ### START EXPERIMENTS
     ############################################################################"""
     if calculate_welfare:
-        vt_stay_c, vt_stay_nc, vt_renter, b_stay_c, b_stay_nc, b_renter,_,_,_ = household_problem.solve_ss(grids, par, C["vCoeff_C_initial_HE"][0], C["vCoeff_NC_initial_HE"][0], cfg.solve_initial_ss_HE)
-        mDist1_c_SS, mDist1_nc_SS, mDist1_renter_SS, rental_stock_C0, rental_stock_NC0, coastal_beq0, noncoastal_beq0, savings_beq0, no_beq=sim.stat_dist_finder(par, grids, vt_stay_c[0,], vt_stay_nc[0,], vt_renter[0,], b_stay_c[0,], b_stay_nc[0,], b_renter[0,], C["vCoeff_C_initial_HE"],C["vCoeff_NC_initial_HE"], cfg.solve_initial_ss_HE)
+        vt_stay_c, vt_stay_nc, vt_renter, b_stay_c, b_stay_nc, b_renter,_,_,_, qm_c, qm_nc = household_problem.solve_ss(grids, par, C["vCoeff_C_initial_HE"][0], C["vCoeff_NC_initial_HE"][0], cfg.solve_initial_ss_HE)
+        mDist1_c_SS, mDist1_nc_SS, mDist1_renter_SS, rental_stock_C0, rental_stock_NC0, coastal_beq0, noncoastal_beq0, savings_beq0, no_beq=sim.stat_dist_finder(par, grids, vt_stay_c[0,], vt_stay_nc[0,], vt_renter[0,], b_stay_c[0,], b_stay_nc[0,], b_renter[0,], qm_c[0,], qm_nc[0,], C["vCoeff_C_initial_HE"],C["vCoeff_NC_initial_HE"], cfg.solve_initial_ss_HE)
 
         price_history, mDist1_c_2026, mDist1_nc_2026, mDist1_renter_2026, rental_stock_C_2026, rental_stock_NC_2026, _, _, _, _, _, _, _, _, _, _, _, _, _, _=equil.generate_pricepath(grids, par, C["vCoeff_C_HE"], C["vCoeff_NC_HE"], dP_C_initial, dP_NC_initial, mDist1_c_SS, mDist1_nc_SS, mDist1_renter_SS, rental_stock_C0, rental_stock_NC0, coastal_beq0, noncoastal_beq0, savings_beq0, cfg.path_until_experiment)
             
-        del vt_stay_c, vt_stay_nc, vt_renter, b_stay_c, b_stay_nc, b_renter, mDist1_c_SS, mDist1_nc_SS, mDist1_renter_SS
+        del vt_stay_c, vt_stay_nc, vt_renter, b_stay_c, b_stay_nc, b_renter, qm_c, qm_nc, mDist1_c_SS, mDist1_nc_SS, mDist1_renter_SS
         "(4) + (5) welfare effects of policy: building restrictions and mortgage premium"
         print("start with welfare of policy")
         tax_equiv_C_MP, tax_equiv_NC_MP, tax_equiv_renter_MP, tax_equiv_newborns_MP,tax_equiv_C_BR, tax_equiv_NC_BR, tax_equiv_renter_BR, tax_equiv_newborns_BR = welfare_stats.find_expenditure_equiv_EK_policy(par, grids, C["vCoeff_C_HE"], C["vCoeff_NC_HE"],C["vCoeff_C_MP"], C["vCoeff_NC_MP"], C["vCoeff_C_BR"], C["vCoeff_NC_BR"], mDist1_c_2026, mDist1_nc_2026, mDist1_renter_2026, vcoastal_beq, vnoncoastal_beq, vsavings_beq, cfg.transition_path, cfg.experiment_mortgage_prem, cfg.experiment_building_rest)

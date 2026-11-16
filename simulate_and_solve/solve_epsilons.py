@@ -14,11 +14,10 @@ import misc_functions as misc
 ###########################################################
 ### main
 def main():
-    plot_distribution=False
-    calculate_welfare=True   
-    only_RE_welfare=True
+    plot_distribution=True
+    calculate_welfare=False
+    only_RE_welfare=False
     welfare_out = collect_results.collect_results(plot_distribution, calculate_welfare, only_RE_welfare)
-
   
 ###########################################################
 
