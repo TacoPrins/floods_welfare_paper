@@ -1,5 +1,3 @@
-
-
 """
 continuation_value.py
 """
@@ -100,6 +98,23 @@ def solve_last_period_renters(par, grids):
     #Return mW for final argument, not mW_f, since flood risk does not affect terminal value
     return par.dBeta*mW, par.dBeta*(1+par.r)*mQ, par.dBeta*mW
 
+
+@njit
+def nondecreasing_in_m(v_input):
+    """True for each (h, l, e) column of a (vM, vH, vL, vE) value array that never falls with cash. Only on
+    those columns can the value at the no-default cash bound a refinancing candidate from above."""
+    mono = np.zeros((v_input.shape[1], v_input.shape[2], v_input.shape[3]), dtype=np.bool_)
+    for h_index in range(v_input.shape[1]):
+        for l_index in range(v_input.shape[2]):
+            for e_index in range(v_input.shape[3]):
+                ok = True
+                for m_index in range(v_input.shape[0]-1):
+                    if v_input[m_index+1, h_index, l_index, e_index] < v_input[m_index, h_index, l_index, e_index]:
+                        ok = False
+                        break
+                mono[h_index, l_index, e_index] = ok
+    return mono
+
 @njit
 def solve_owners_C(par, grids, j_index, k_index, vPi_S, dPi_L, coastal_stayer_inputs,coastal_mover_inputs, dP_C_prime,mortgage_size_C, config):
     if config.mortgage_premium == False:
@@ -120,10 +135,19 @@ def solve_owners_C(par, grids, j_index, k_index, vPi_S, dPi_L, coastal_stayer_in
     qt_stay_c_input = coastal_stayer_inputs['qt_stay_c_input']
     qt_renter_input = coastal_mover_inputs['qt_renter_input']
     qt_buy_c_input = coastal_mover_inputs['qt_buy_c_input']
-    qt_buy_nc_input = coastal_mover_inputs['qt_buy_nc_input']            
+    qt_buy_nc_input = coastal_mover_inputs['qt_buy_nc_input']
 
+    # Lender / mortgage-pricing inputs at (t+1, j_index): own savings policy, pooled offered price,
+    # type-specific lender value of outstanding debt
+    b_stay_c_input = coastal_stayer_inputs['b_stay_c_input']
+    qm_c_input = coastal_stayer_inputs['qm_c_input']
+    lv_c_input = coastal_stayer_inputs['lv_c_input']
+    mQ_start = q_start_array(grids, qm_c_input)
+    v_mono = nondecreasing_in_m(vt_stay_c_input)
+    lender_rate = misc.lender_discount_rate(par)
+    mV_inner = np.zeros((grids.vB.size, grids.vH.size, grids.vL.size, grids.vE.size))
 
-    if j_index<par.j_ret:   
+    if j_index<par.j_ret:
         mW_inner = np.zeros((grids.vB.size, grids.vH.size, grids.vL.size, grids.vE.size, grids.vE_trans.size))       
         mW_wf_inner = np.zeros((grids.vB.size, grids.vH.size, grids.vL.size, grids.vE.size, grids.vE_trans.size))
         mQ_inner = np.zeros((grids.vB.size, grids.vH.size, grids.vL.size, grids.vE.size, grids.vE_trans.size))
@@ -215,19 +239,6 @@ def solve_owners_C(par, grids, j_index, k_index, vPi_S, dPi_L, coastal_stayer_in
                             
 
                             
-                            if max_ltv_choice_index>ltv_minpay_index and j_index<par.iNj-1:
-                                for l_choice_index in range(ltv_minpay_index+1,max_ltv_choice_index+1):
-                                    payment=(mortgage_withint-grids.vL[l_choice_index]*house_value*(1-par.dZeta))+par.dZeta_fixed
-                                    if payment>max_payment:
-                                        continue
-                                    assert payment-par.dZeta*grids.vL[l_choice_index]*house_value-par.dZeta_fixed<=min_payment
-                                    candidate_value=interp.interp_1d(grids.vM, vt_stay_c_input[:,h_index, l_choice_index, e_prime_index],stayer_cih_beforem-payment)
-                                    if candidate_value>stay_refinance:
-                                        payment_refinance = payment
-                                        l_index_refinance = l_choice_index
-                                        stay_refinance=candidate_value
-                           
-                            
                             if mortgage_withint>sell_value:
                                 default = -1/(-1/interp.interp_1d(grids.vX, vt_renter_input[:, e_prime_index],defaulter_cih)-par.dXi_foreclosure)
                             else:
@@ -240,9 +251,41 @@ def solve_owners_C(par, grids, j_index, k_index, vPi_S, dPi_L, coastal_stayer_in
                             
                             buyC = interp.interp_1d(grids.vX, vt_buy_c_input[:, e_prime_index],seller_cih)
                             buyNC = interp.interp_1d(grids.vX, vt_buy_nc_input[:, e_prime_index],seller_cih)
-                
-                              
+                            # Best value without refinancing (these options are computed before refinancing so that
+                            # refinancing candidates that cannot beat them skip the fixed point; the choice is unchanged)
+                            best_no_refi = max(max(stay, stay_paymore), max(max(default, stay_renter), max(buyC, buyNC)))
+
+                            if max_ltv_choice_index>ltv_minpay_index and j_index<par.iNj-1:
+                                for l_choice_index in range(ltv_minpay_index+1,max_ltv_choice_index+1):
+                                    L_new=grids.vL[l_choice_index]*house_value
+                                    assert mortgage_withint-L_new<=min_payment+1e-10
+                                    # cheapest possible payment (no-default price); skip if even that is infeasible
+                                    if mortgage_withint-mQ_start[h_index,l_choice_index,e_prime_index]*L_new+par.dZeta_fixed>max_payment:
+                                        continue
+                                    # price-taking fixed point: old loan repaid, new loan pays q*L_new
+                                    m_pre=stayer_cih_beforem-mortgage_withint-par.dZeta_fixed
+                                    # q <= q_start, so the value at the no-default cash m_pre+q_start*L_new bounds this candidate from above
+                                    # (valid when the stayer value rises with cash): skip the fixed point if it cannot win
+                                    if v_mono[h_index,l_choice_index,e_prime_index]:
+                                        v_bound = interp.interp_1d(grids.vM, vt_stay_c_input[:,h_index, l_choice_index, e_prime_index], m_pre+mQ_start[h_index,l_choice_index,e_prime_index]*L_new)
+                                        if v_bound <= best_no_refi or v_bound <= stay_refinance:
+                                            continue
+                                    # the new LTV is a grid point, so the LTV columns are plain slices
+                                    _, m_refi, _ = misc.price_loan_col(grids.vM, grids.vB, b_stay_c_input[:,h_index,l_choice_index,e_prime_index], qm_c_input[:,h_index,l_choice_index,e_prime_index], m_pre, L_new, mQ_start[h_index,l_choice_index,e_prime_index])
+                                    payment=stayer_cih_beforem-m_refi
+                                    if payment>max_payment:
+                                        continue
+                                    candidate_value=interp.interp_1d(grids.vM, vt_stay_c_input[:,h_index, l_choice_index, e_prime_index],stayer_cih_beforem-payment)
+                                    if candidate_value>stay_refinance:
+                                        payment_refinance = payment
+                                        l_index_refinance = l_choice_index
+                                        stay_refinance=candidate_value
+                           
+                            # lender payoff when the borrower sells, moves or refinances (default and stay overwrite this value)
+                            lender_payoff = mortgage_withint
                             if (stay > stay_renter) and (stay > buyC) and (stay > buyNC) and (stay >= stay_paymore) and (stay >= stay_refinance) and (stay > default):
+                                if l_index>0:
+                                    lender_payoff = lender_stay_payoff(grids, b_stay_c_input[:,h_index,:,e_prime_index], lv_c_input[:,h_index,:,e_prime_index], stayer_cih_beforem-min_payment, ltv_minpay, min_payment, mortgage_withint)
                                 mW_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] += prob_dZ * -1/stay
                                 mQ_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] +=  prob_dZ *-1/misc.interp_2d(grids.vM, grids.vL, qt_stay_c_input[ :,h_index, :, e_prime_index],stayer_cih_beforem-min_payment, ltv_minpay)
                                 if config.welfare == True:
@@ -250,6 +293,7 @@ def solve_owners_C(par, grids, j_index, k_index, vPi_S, dPi_L, coastal_stayer_in
                                 
                                 
                             elif (stay_paymore > stay_renter) and (stay_paymore > buyC) and (stay_paymore > buyNC) and (stay_paymore > stay_refinance) and (stay_paymore > default):
+                                lender_payoff = lender_stay_payoff(grids, b_stay_c_input[:,h_index,:,e_prime_index], lv_c_input[:,h_index,:,e_prime_index], stayer_cih_beforem-payment_paymore, grids.vL[l_index_paymore], payment_paymore, mortgage_withint)
                                 mW_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] += prob_dZ *-1/stay_paymore
                                 mQ_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] += prob_dZ *-1/interp.interp_1d(grids.vM, qt_stay_c_input[ :,h_index, l_index_paymore, e_prime_index],stayer_cih_beforem-payment_paymore)
                                 if config.welfare == True:
@@ -263,7 +307,8 @@ def solve_owners_C(par, grids, j_index, k_index, vPi_S, dPi_L, coastal_stayer_in
                                     mW_wf_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] += prob_dZ_true * -1/interp.interp_1d(grids.vM,vt_stay_c_input_wf[  :,h_index, l_index_refinance, e_prime_index],stayer_cih_beforem-payment_refinance)
                            
                            
-                            elif (default > stay_renter) and (default > buyC) and (default > buyNC): 
+                            elif (default > stay_renter) and (default > buyC) and (default > buyNC):
+                                lender_payoff = min(max(sell_value-par.dDelta_default*h*dP_C_prime, 0.0), mortgage_withint)
                                 mW_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] += prob_dZ *-1/default
                                 mQ_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] += prob_dZ *-1/interp.interp_1d(grids.vX, qt_renter_input[:, e_prime_index],defaulter_cih)
                                 if config.welfare == True:
@@ -287,8 +332,14 @@ def solve_owners_C(par, grids, j_index, k_index, vPi_S, dPi_L, coastal_stayer_in
                                 mQ_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] += prob_dZ *-1/interp.interp_1d(grids.vX, qt_buy_nc_input[:, e_prime_index],seller_cih)
                                 if config.welfare == True:
                                     mW_wf_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] += prob_dZ_true * -1/interp.interp_1d(grids.vX, vt_buy_nc_input_wf[:, e_prime_index],seller_cih)
-                                    
-    if j_index<par.j_ret:  
+
+                            if l_index>0:
+                                # lender uses the TRUE flood probabilities
+                                mV_inner[b_index,h_index,l_index,e_prime_index] += (grids.mMarkov_trans[e_trans_index] if j_index<par.j_ret else 1.0)*prob_dZ_true*lender_payoff
+
+    mV = lender_integrate(par, grids, j_index, mV_inner, mortgage_size_C, lender_rate)
+
+    if j_index<par.j_ret:
         for e_index in range(grids.vE.size):
             for e_prime_index in range(grids.vE.size):
                 for e_trans_index in range(grids.vE_trans.size):        
@@ -308,7 +359,7 @@ def solve_owners_C(par, grids, j_index, k_index, vPi_S, dPi_L, coastal_stayer_in
     assert np.isnan(mQ).sum() == 0
 
     
-    return par.dBeta*mW, par.dBeta*(1+par.r)*mQ, par.dBeta*mW_wf, mW_wf_inner[:, :, :, :, 0] 
+    return par.dBeta*mW, par.dBeta*(1+par.r)*mQ, par.dBeta*mW_wf, mW_wf_inner[:, :, :, :, 0], mV
 
 @njit
 def solve_owners_NC(par, grids, j_index, k_index, noncoastal_stayer_inputs,noncoastal_mover_inputs, dP_NC_prime, mortgage_size_NC, config):
@@ -326,9 +377,17 @@ def solve_owners_NC(par, grids, j_index, k_index, noncoastal_stayer_inputs,nonco
     qt_stay_nc_input = noncoastal_stayer_inputs['qt_stay_nc_input']
     qt_renter_input = noncoastal_mover_inputs['qt_renter_input']
     qt_buy_c_input = noncoastal_mover_inputs['qt_buy_c_input']
-    qt_buy_nc_input = noncoastal_mover_inputs['qt_buy_nc_input']    
+    qt_buy_nc_input = noncoastal_mover_inputs['qt_buy_nc_input']
 
- 
+    # Lender / mortgage-pricing inputs at (t+1, j_index)
+    b_stay_nc_input = noncoastal_stayer_inputs['b_stay_nc_input']
+    qm_nc_input = noncoastal_stayer_inputs['qm_nc_input']
+    lv_nc_input = noncoastal_stayer_inputs['lv_nc_input']
+    mQ_start = q_start_array(grids, qm_nc_input)
+    v_mono = nondecreasing_in_m(vt_stay_nc_input)
+    lender_rate = misc.lender_discount_rate(par)
+    mV_inner = np.zeros((grids.vB.size, grids.vH.size, grids.vL.size, grids.vE.size))
+
     if j_index<par.j_ret:   
         mW_inner = np.zeros((grids.vB.size, grids.vH.size, grids.vL.size, grids.vE.size, grids.vE_trans.size))       
         mW_wf_inner = np.zeros((grids.vB.size, grids.vH.size, grids.vL.size, grids.vE.size, grids.vE_trans.size))
@@ -410,19 +469,6 @@ def solve_owners_NC(par, grids, j_index, k_index, noncoastal_stayer_inputs,nonco
                                     stay_paymore=candidate_value
                             
                                                        
-                        if max_ltv_choice_index>ltv_minpay_index and j_index<par.iNj-1:
-                            for l_choice_index in range(ltv_minpay_index+1,max_ltv_choice_index+1):
-                                payment=(mortgage_withint-grids.vL[l_choice_index]*house_value*(1-par.dZeta))+par.dZeta_fixed
-                                if payment>max_payment:
-                                    continue
-                                assert payment-par.dZeta*grids.vL[l_choice_index]*house_value-par.dZeta_fixed<=min_payment
-                                candidate_value=interp.interp_1d(grids.vM, vt_stay_nc_input[ :,h_index, l_choice_index, e_prime_index],stayer_cih_beforem-payment)
-                                if candidate_value>stay_refinance:
-                                    payment_refinance = payment
-                                    l_index_refinance = l_choice_index
-                                    stay_refinance=candidate_value
-                        
-                                                    
                         if mortgage_withint>sell_value:
                             default = -1/(-1/interp.interp_1d(grids.vX, vt_renter_input[:, e_prime_index],defaulter_cih)-par.dXi_foreclosure)
                         else:
@@ -435,15 +481,45 @@ def solve_owners_NC(par, grids, j_index, k_index, noncoastal_stayer_inputs,nonco
                        
                         buyC = interp.interp_1d(grids.vX, vt_buy_c_input[:, e_prime_index],seller_cih)        
                         buyNC = interp.interp_1d(grids.vX, vt_buy_nc_input[:, e_prime_index],seller_cih)
-                                                                                
+                        # Best value without refinancing (these options are computed before refinancing so that
+                        # refinancing candidates that cannot beat them skip the fixed point; the choice is unchanged)
+                        best_no_refi = max(max(stay, stay_paymore), max(max(default, stay_renter), max(buyC, buyNC)))
+
+                        if max_ltv_choice_index>ltv_minpay_index and j_index<par.iNj-1:
+                            for l_choice_index in range(ltv_minpay_index+1,max_ltv_choice_index+1):
+                                L_new=grids.vL[l_choice_index]*house_value
+                                assert mortgage_withint-L_new<=min_payment+1e-10
+                                if mortgage_withint-mQ_start[h_index,l_choice_index,e_prime_index]*L_new+par.dZeta_fixed>max_payment:
+                                    continue
+                                m_pre=stayer_cih_beforem-mortgage_withint-par.dZeta_fixed
+                                # q <= q_start, so the value at the no-default cash m_pre+q_start*L_new bounds this candidate from above
+                                # (valid when the stayer value rises with cash): skip the fixed point if it cannot win
+                                if v_mono[h_index,l_choice_index,e_prime_index]:
+                                    v_bound = interp.interp_1d(grids.vM, vt_stay_nc_input[:,h_index, l_choice_index, e_prime_index], m_pre+mQ_start[h_index,l_choice_index,e_prime_index]*L_new)
+                                    if v_bound <= best_no_refi or v_bound <= stay_refinance:
+                                        continue
+                                # the new LTV is a grid point, so the LTV columns are plain slices
+                                _, m_refi, _ = misc.price_loan_col(grids.vM, grids.vB, b_stay_nc_input[:,h_index,l_choice_index,e_prime_index], qm_nc_input[:,h_index,l_choice_index,e_prime_index], m_pre, L_new, mQ_start[h_index,l_choice_index,e_prime_index])
+                                payment=stayer_cih_beforem-m_refi
+                                if payment>max_payment:
+                                    continue
+                                candidate_value=interp.interp_1d(grids.vM, vt_stay_nc_input[ :,h_index, l_choice_index, e_prime_index],stayer_cih_beforem-payment)
+                                if candidate_value>stay_refinance:
+                                    payment_refinance = payment
+                                    l_index_refinance = l_choice_index
+                                    stay_refinance=candidate_value
                         
+                        lender_payoff = mortgage_withint
                         if (stay > stay_renter) and (stay > buyC) and (stay > buyNC) and (stay >= stay_paymore) and (stay >= stay_refinance) and (stay>default):
+                            if l_index>0:
+                                lender_payoff = lender_stay_payoff(grids, b_stay_nc_input[:,h_index,:,e_prime_index], lv_nc_input[:,h_index,:,e_prime_index], stayer_cih_beforem-min_payment, ltv_minpay, min_payment, mortgage_withint)
                             mW_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] = -1/stay
                             mQ_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] = -1/misc.interp_2d(grids.vM, grids.vL, qt_stay_nc_input[ :,h_index, :, e_prime_index],stayer_cih_beforem-min_payment, ltv_minpay)
                             if config.welfare == True:
                                 mW_wf_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] = -1/misc.interp_2d(grids.vM, grids.vL, vt_stay_nc_input_wf[ :,h_index, :, e_prime_index],stayer_cih_beforem-min_payment, ltv_minpay)
                                 
                         elif (stay_paymore > stay_renter) and (stay_paymore > buyC) and (stay_paymore > buyNC) and (stay_paymore > stay_refinance) and (stay_paymore>default):
+                            lender_payoff = lender_stay_payoff(grids, b_stay_nc_input[:,h_index,:,e_prime_index], lv_nc_input[:,h_index,:,e_prime_index], stayer_cih_beforem-payment_paymore, grids.vL[l_index_paymore], payment_paymore, mortgage_withint)
                             mW_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] = -1/stay_paymore
                             mQ_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] = -1/interp.interp_1d(grids.vM, qt_stay_nc_input[ :,h_index, l_index_paymore, e_prime_index],stayer_cih_beforem-payment_paymore)
                             if config.welfare == True:
@@ -474,13 +550,19 @@ def solve_owners_NC(par, grids, j_index, k_index, noncoastal_stayer_inputs,nonco
                             if config.welfare == True:
                                 mW_wf_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] = -1/interp.interp_1d(grids.vX, vt_buy_nc_input_wf[:, e_prime_index],seller_cih) 
 
-                        else: 
+                        else:
+                            lender_payoff = min(max(sell_value-par.dDelta_default*h*dP_NC_prime, 0.0), mortgage_withint)
                             mW_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] = -1/default
                             mQ_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] = -1/interp.interp_1d(grids.vX, qt_renter_input[:, e_prime_index],defaulter_cih)  
                             if config.welfare == True:
                                 mW_wf_inner[ b_index,h_index,l_index, e_prime_index, e_trans_index] = (-1/interp.interp_1d(grids.vX, vt_renter_input_wf[:, e_prime_index],defaulter_cih)-par.dXi_foreclosure)
-                                
-    if j_index<par.j_ret:  
+
+                        if l_index>0:
+                            mV_inner[b_index,h_index,l_index,e_prime_index] += (grids.mMarkov_trans[e_trans_index] if j_index<par.j_ret else 1.0)*lender_payoff
+
+    mV = lender_integrate(par, grids, j_index, mV_inner, mortgage_size_NC, lender_rate)
+
+    if j_index<par.j_ret:
         for e_index in range(grids.vE.size):
             for e_prime_index in range(grids.vE.size):
                 for e_trans_index in range(grids.vE_trans.size):        
@@ -499,7 +581,7 @@ def solve_owners_NC(par, grids, j_index, k_index, noncoastal_stayer_inputs,nonco
     assert np.isnan(mW).sum() == 0
     assert np.isnan(mQ).sum() == 0
     
-    return par.dBeta*mW, par.dBeta*(1+par.r)*mQ, par.dBeta*mW_wf, mW_wf_inner[:, :, :, :, 0] 
+    return par.dBeta*mW, par.dBeta*(1+par.r)*mQ, par.dBeta*mW_wf, mW_wf_inner[:, :, :, :, 0], mV
 
 
 @njit
@@ -594,3 +676,57 @@ def compute_p_left(grid, x, i_left):
     p_left = (x_right - x) / (x_right - x_left)
 
     return p_left
+
+###########################################################
+### Lender side helpers
+###########################################################
+
+
+@njit
+def lender_stay_payoff(grids, b_stay_hl, lv_hl, cash, ltv_new, payment, mortgage_withint):
+    """Lender cash flow when the borrower keeps the loan: the payment now plus the value of the
+    remaining balance, priced at V_{t+1,j+1} evaluated at the borrower's own next savings choice b''.
+    See equation in the paper"""
+    remaining = mortgage_withint - payment
+    if remaining <= 1e-12:
+        return payment
+    b_next = misc.interp_2d(grids.vM, grids.vL, b_stay_hl, cash, ltv_new)
+    b_next = min(max(b_next, grids.vB[0]), grids.vB[-1])
+    v_next = misc.interp_2d(grids.vB, grids.vL, lv_hl, b_next, ltv_new)
+    if v_next < 0.0:
+        v_next = 0.0
+    return payment + v_next*remaining
+
+
+@njit
+def lender_integrate(par, grids, j_index, mV_inner, mortgage_size, lender_rate):
+    """Integrate lender payoffs over e' and normalise by (1+r_lender)*face value.
+    Note: integrates with mMarkov only (the transitory shock does not enter the lender payoff
+    beyond what is computed at e_trans_index=0, which is all the household code fills also at
+    this point there is not a transitory shock and will probably be deleted anyway)."""
+    mV = np.ones((grids.vB.size, grids.vH.size, grids.vL.size, grids.vE.size))
+    mV_e = np.zeros((grids.vB.size, grids.vH.size, grids.vL.size, grids.vE.size))
+    if j_index<par.j_ret:
+        for e_index in range(grids.vE.size):
+            for e_prime_index in range(grids.vE.size):
+                mV_e[:, :, :, e_index] += grids.mMarkov[e_index, e_prime_index]*mV_inner[:, :, :, e_prime_index]
+    else:
+        mV_e[:, :, :, :] = mV_inner[:, :, :, :]
+    for h_index in range(grids.vH.size):
+        for l_index in range(1, grids.vL.size):
+            face = mortgage_size[h_index, l_index]
+            if face > 0:
+                mV[:, h_index, l_index, :] = mV_e[:, h_index, l_index, :]/((1+lender_rate)*face)
+    assert np.isnan(mV).sum() == 0
+    return mV
+
+
+@njit
+def q_start_array(grids, qm_input):
+    """Upper bound of q over b' (no-default price), per (h, l, e), used to start the algorithm."""
+    mQ_start = np.zeros((grids.vH.size, grids.vL.size, grids.vE.size))
+    for h in range(grids.vH.size):
+        for l in range(grids.vL.size):
+            for e in range(grids.vE.size):
+                mQ_start[h, l, e] = qm_input[:, h, l, e].max()
+    return mQ_start
