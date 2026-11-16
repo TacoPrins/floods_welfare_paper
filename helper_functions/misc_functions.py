@@ -376,3 +376,165 @@ def net_income(par, grids, j, e_index, e_trans_index, mortgage_size, mortgage_ra
     mortgage_rebate=(mortgage_rebate/grids.median_inc)*(1-par.wf_wedge[0])
         
     return net_income, mortgage_rebate
+
+###########################################################
+### Mortgage pricing (KMV-style, household-specific q)
+###########################################################
+#
+# q_{t,j}(b', h, l', e) = price per unit of face value that a borrower receives at origination.
+# Face value L = l' * h * P_t. Cash received = q * L.
+# q = (1 - dZeta) * [s * V^sceptic + (1 - s) * V^realist], where V is the lender's value of
+# one unit of outstanding debt (=1 without default risk when contract rate = lender discount rate).
+# V is computed in continuation_value (solve_owners_C / solve_owners_NC); pooling happens in
+# household_problem. Households take q as given w.r.t. b' in the origination period, so each
+# origination is a small fixed point: cash -> b' -> q -> cash.
+
+@njit
+def lender_discount_rate(par):
+    """Lender's cost of funds, common to both locations.
+    Baseline: equal to the inland contract rate, so V=1 without default risk.
+    If the coastal contract rate differs (e.g. config.mortgage_premium), the coastal V
+    without default risk is the PV of the payment stream at this rate, and can exceed 1."""
+    return par.r_m_nc
+
+
+###########################################################
+### Fixed point on precomputed LTV columns (for the simulation's loops)
+###########################################################
+# In the simulation the LTV of a candidate loan is fixed while price_loan is called for many cash
+# levels. Bilinear interpolation at a fixed LTV equals linear interpolation in the first dimension of
+# the LTV-blended column, so blending once per (h, ltv) and interpolating in 1D gives the same numbers
+# (up to rounding) at a fraction of the cost: no search over vL, and 2 instead of 4 grid points.
+
+@njit
+def ltv_column(vL, value_hl, ltv):
+    """Blend value_hl[:, l] over the LTV grid at ltv (linear, extrapolating like interp_2d)."""
+    l_idx = binary_search(0, vL.size, vL, ltv)
+    w = (ltv - vL[l_idx]) / (vL[l_idx+1] - vL[l_idx])
+    return (1-w)*value_hl[:, l_idx] + w*value_hl[:, l_idx+1]
+
+@njit
+def _interp_col(grid, col, x):
+    i = binary_search(0, grid.size, grid, x)
+    return col[i] + (x - grid[i])*(col[i+1] - col[i])/(grid[i+1] - grid[i])
+
+
+@njit
+def _q_map_col(vM, vB, b_col, q_col, m_pre, L, q):
+    """step 2-5: compute m based on q (guess), find b' for that m. find q for that b'"""
+    m = m_pre + q*L
+    b = _interp_col(vM, b_col, m)
+    b_clip = min(max(b, vB[0]), vB[-1])
+    q_new = _interp_col(vB, q_col, b_clip)
+    if q_new < 0.0:
+        q_new = 0.0
+    return q_new, b
+
+
+@njit
+def _bisect_fixed_point_col(vM, vB, b_col, q_col, m_pre, L, lo, hi, tol):
+    for it in range(60):
+        mid = 0.5*(lo + hi)
+        f_mid, _ = _q_map_col(vM, vB, b_col, q_col, m_pre, L, mid)
+        if mid - f_mid > 0.0:
+            hi = mid
+        else:
+            lo = mid
+        if (hi - lo)*L < tol:
+            break
+    return 0.5*(lo + hi)
+
+
+@njit
+def price_loan_col(vM, vB, b_col, q_col, m_pre, L, q_start, tol=1e-9, max_it=50):
+    """the algorithm itself for b_col = ltv_column(vL, b_stay_hl, ltv), q_col = ltv_column(vL, q_hl, ltv),
+    and q_start = q_col.max() (= q_upper). Same algorithm and stopping rules as price_loan."""
+    q = q_start
+    q_prev = q_start
+    for it in range(max_it):
+        q_new, b = _q_map_col(vM, vB, b_col, q_col, m_pre, L, q)
+        if abs(q_new - q)*L < tol: # converged
+            return q_new, m_pre + q_new*L, b
+        if q_new > q: # algoritgm spirals, do a bisection on the grid
+            q_root = _bisect_fixed_point_col(vM, vB, b_col, q_col, m_pre, L, q, q_prev, tol)
+            _, b = _q_map_col(vM, vB, b_col, q_col, m_pre, L, q_root)
+            return q_root, m_pre + q_root*L, b
+        q_prev = q
+        q = q_new
+    # non-convergence with algorithm, do bisection
+    q_root = _bisect_fixed_point_col(vM, vB, b_col, q_col, m_pre, L, 0.0, q, tol)
+    _, b = _q_map_col(vM, vB, b_col, q_col, m_pre, L, q_root)
+    return q_root, m_pre + q_root*L, b
+
+@njit
+def col_nondecreasing(vL, value_ml, ltv, l_idx):
+    # for speed-ups
+    """True if value_ml (vM, vL) blended over the LTV grid at ltv (inside the grid cell l_idx) never falls with
+    cash. Only then does the value at the no-default cash bound a mortgage candidate from above."""
+    w = (ltv - vL[l_idx]) / (vL[l_idx+1] - vL[l_idx])
+    if w < 0.0 or w > 1.0:
+        return False
+    for m_index in range(value_ml.shape[0]-1):
+        v0 = (1-w)*value_ml[m_index, l_idx] + w*value_ml[m_index, l_idx+1]
+        v1 = (1-w)*value_ml[m_index+1, l_idx] + w*value_ml[m_index+1, l_idx+1]
+        if v1 < v0:
+            return False
+    return True
+
+@njit
+def ltv_tables(grids, b_input, q_input, max_ltv):
+    # used in simulation
+    """LTV columns for every house size h and every LTV the simulation can choose: the points of
+    grids.vL_sim (index l), plus the between-grid limit max_ltv[h] (index vL_sim.size).
+    b_input: (vM, vH, vL) stayer savings policy, q_input: (vB, vH, vL) mortgage price, at (t, j, k, g, e).
+    Returns b_cols (H, nL+1, vM), q_cols (H, nL+1, vB) and q_start = max of each q column."""
+    nL = grids.vL_sim.size
+    b_cols = np.zeros((grids.vH.size, nL+1, grids.vM.size))
+    q_cols = np.zeros((grids.vH.size, nL+1, grids.vB.size))
+    q_start = np.zeros((grids.vH.size, nL+1))
+    for h_index in range(grids.vH.size):
+        for l in range(nL+1):
+            ltv = grids.vL_sim[l] if l < nL else max_ltv[h_index]
+            b_cols[h_index, l] = ltv_column(grids.vL, b_input[:, h_index, :], ltv)
+            q_cols[h_index, l] = ltv_column(grids.vL, q_input[:, h_index, :], ltv)
+            q_start[h_index, l] = q_cols[h_index, l].max()
+    return b_cols, q_cols, q_start
+
+# Diagnostic only (not called by price_loan). Use offline on a few slices, e.g. to count
+# how often q falls with savings; a violation is not an error.
+@njit
+def check_price_loan_monotonicity(vM, vB, vL, b_stay_hl, q_hl,
+                                  ltv, check_tol=1e-8):
+    """Sufficient test for monotonicity of F(q)=q(b_stay(m_pre+q*L)).
+
+    At the chosen LTV, check that savings is nondecreasing in cash m,
+    and the offered mortgage price is nondecreasing in savings b.
+    These checks are exact for the piecewise-linear interpolation used
+    by _q_map, including between-grid LTV choices.
+
+    Returns: 0 if both checks pass, 1 if savings declines in m,
+    2 if q declines in b. A failure is not proof that F is
+    nonmonotone on the cash range relevant to a particular loan.
+    """
+    li = binary_search(0, vL.size, vL, ltv)
+    weight = (ltv - vL[li]) / (vL[li+1] - vL[li])
+
+    b_previous = (1-weight)*b_stay_hl[0,li] + weight*b_stay_hl[0,li+1]
+    if not np.isfinite(b_previous):
+        return 1
+    for i in range(1, vM.size):
+        b_current = (1-weight)*b_stay_hl[i,li] + weight*b_stay_hl[i,li+1]
+        if not np.isfinite(b_current) or b_current < b_previous - check_tol:
+            return 1
+        b_previous = b_current
+
+    q_previous = (1-weight)*q_hl[0,li] + weight*q_hl[0,li+1]
+    if not np.isfinite(q_previous):
+        return 2
+    for i in range(1, vB.size):
+        q_current = (1-weight)*q_hl[i,li] + weight*q_hl[i,li+1]
+        if not np.isfinite(q_current) or q_current < q_previous - check_tol:
+            return 2
+        q_previous = q_current
+
+    return 0
