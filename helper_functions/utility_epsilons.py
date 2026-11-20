@@ -53,13 +53,13 @@ def W_bequest_flooddamage(par,grids, h, b, dP):
         dZ = grids.vZ[damage_index]
         prob_dZ = grids.PDF_z[damage_index]
         
-        vBequest_flooddamage += prob_dZ * par.dNu*((par.b_bar + (1-par.dDelta-par.dKappa_sell-(1-dZ))*h*dP + (1+par.r)*b)**(1-par.dSigma))/(1-par.dSigma)
+        vBequest_flooddamage += prob_dZ * par.dNu*((par.b_bar + (1-par.dDelta-par.dTau_h-par.dKappa_sell-(1-dZ))*h*dP + (1+par.r)*b)**(1-par.dSigma))/(1-par.dSigma)
 
     return vBequest_flooddamage
 
 @njit
 def W_bequest_noflooddamage(par,h, b, dP):
-    vBequest_noflooddamage=par.dNu*((par.b_bar + (1-par.dDelta-par.dKappa_sell)*h*dP + (1+par.r)*b)**(1-par.dSigma))/(1-par.dSigma)
+    vBequest_noflooddamage=par.dNu*((par.b_bar + (1-par.dDelta-par.dTau_h-par.dKappa_sell)*h*dP + (1+par.r)*b)**(1-par.dSigma))/(1-par.dSigma)
 
     return vBequest_noflooddamage
 
@@ -70,12 +70,12 @@ def Q_bequest_flooddamage(par, grids, h, b, dP):
         dZ = grids.vZ[damage_index]
         prob_dZ = grids.PDF_z[damage_index]
         
-        Q_Bequest_flooddamage += prob_dZ*par.dNu*(par.b_bar + (1-par.dDelta-par.dKappa_sell-(1-dZ))*h*dP + (1+par.r)*b)**(-par.dSigma)
+        Q_Bequest_flooddamage += prob_dZ*par.dNu*(par.b_bar + (1-par.dDelta-par.dTau_h-par.dKappa_sell-(1-dZ))*h*dP + (1+par.r)*b)**(-par.dSigma)
     return Q_Bequest_flooddamage
 
 @njit
 def Q_bequest_noflooddamage(par,h, b, dP):
-    Q_Bequest_noflooddamage=par.dNu*(par.b_bar + (1-par.dDelta-par.dKappa_sell)*h*dP + (1+par.r)*b)**(-par.dSigma)
+    Q_Bequest_noflooddamage=par.dNu*(par.b_bar + (1-par.dDelta-par.dTau_h-par.dKappa_sell)*h*dP + (1+par.r)*b)**(-par.dSigma)
     return Q_Bequest_noflooddamage
 
 @njit
