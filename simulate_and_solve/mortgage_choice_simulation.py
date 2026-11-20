@@ -23,7 +23,7 @@ def solve(par,grids,vt_stay_input,b_cols,q_cols,q_starts,j,h,e, dZ, dP,mortgage_
     #Some helper variables to prevent unnecessary computations
     mortgage_withint=(1+mortgage_rate)*mortgage_start
     house_value=h*dP
-    depreciation=((1-dZ)+par.dDelta)*house_value
+    depreciation=((1-dZ)+par.dDelta+par.dTau_h)*house_value
 
     #cash in hand after housing costs
     m_0=grids.vM[0]
