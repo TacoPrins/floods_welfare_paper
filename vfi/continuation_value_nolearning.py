@@ -44,10 +44,10 @@ def solve_last_period_owners_C(par, grids,  vPi_S, dPi_L, k_index, dP_C_prime,mo
                         else:                                    
                             prob_dZ = dPi_L*grids.vPDF_z[damage_index] 
                             prob_dZ_true = vPi_S*grids.vPDF_z[damage_index] 
-                    mW[b_index,h_index,l_index]+=prob_dZ*ut.W_bequest(par,(1+par.r)*b+(1-par.dDelta-par.dKappa_sell-(1-dZ))*h*dP_C_prime-(1+mortgage_rate)*mortgage_start)
-                    mQ[b_index,h_index,l_index]+=prob_dZ*ut.Q_bequest(par, (1+par.r)*b+(1-par.dDelta-par.dKappa_sell-(1-dZ))*h*dP_C_prime-(1+mortgage_rate)*mortgage_start)
+                    mW[b_index,h_index,l_index]+=prob_dZ*ut.W_bequest(par,(1+par.r)*b+(1-par.dDelta-par.dTau_h-par.dKappa_sell-(1-dZ))*h*dP_C_prime-(1+mortgage_rate)*mortgage_start)
+                    mQ[b_index,h_index,l_index]+=prob_dZ*ut.Q_bequest(par, (1+par.r)*b+(1-par.dDelta-par.dTau_h-par.dKappa_sell-(1-dZ))*h*dP_C_prime-(1+mortgage_rate)*mortgage_start)
                     if config.welfare==True:
-                        mW_wf[b_index,h_index,l_index]+=prob_dZ_true*ut.W_bequest(par,(1+par.r)*b+(1-par.dDelta-par.dKappa_sell-(1-dZ))*h*dP_C_prime-(1+mortgage_rate)*mortgage_start)
+                        mW_wf[b_index,h_index,l_index]+=prob_dZ_true*ut.W_bequest(par,(1+par.r)*b+(1-par.dDelta-par.dTau_h-par.dKappa_sell-(1-dZ))*h*dP_C_prime-(1+mortgage_rate)*mortgage_start)
                   
                    
    
@@ -69,8 +69,8 @@ def solve_last_period_owners_NC(par, grids, k_index, dP_NC_prime,mortgage_size_N
             b=grids.vB[b_index]
             for l_index in range(grids.vL.size):
                 mortgage_start=mortgage_size_NC[h_index,l_index]                
-                mW[b_index,h_index,l_index]=ut.W_bequest(par,(1+par.r)*b+(1-par.dDelta-par.dKappa_sell)*h*dP_NC_prime-(1+par.r_m_nc)*mortgage_start)
-                mQ[b_index,h_index,l_index]=ut.Q_bequest(par, (1+par.r)*b+(1-par.dDelta-par.dKappa_sell)*h*dP_NC_prime-(1+par.r_m_nc)*mortgage_start)
+                mW[b_index,h_index,l_index]=ut.W_bequest(par,(1+par.r)*b+(1-par.dDelta-par.dTau_h-par.dKappa_sell)*h*dP_NC_prime-(1+par.r_m_nc)*mortgage_start)
+                mQ[b_index,h_index,l_index]=ut.Q_bequest(par, (1+par.r)*b+(1-par.dDelta-par.dTau_h-par.dKappa_sell)*h*dP_NC_prime-(1+par.r_m_nc)*mortgage_start)
                   
       
     assert np.isnan(mW).sum() == 0
@@ -212,8 +212,8 @@ def solve_owners_C(par, grids, j_index, k_index, vPi_S, dPi_L, coastal_stayer_in
                                 else:                                    
                                     prob_dZ = dPi_L*grids.vPDF_z[damage_index] 
                                     prob_dZ_true = vPi_S*grids.vPDF_z[damage_index] 
-                            sell_value=(dZ-par.dDelta-par.dKappa_sell)*h*dP_C_prime       
-                            depreciation=(1-dZ+par.dDelta)*h*dP_C_prime  
+                            sell_value=(dZ-par.dDelta-par.dTau_h-par.dKappa_sell)*h*dP_C_prime       
+                            depreciation=(1-dZ+par.dDelta+par.dTau_h)*h*dP_C_prime  
                             max_payment = savings-depreciation+e_prime-grids.vM[0]
                             stayer_cih_beforem=savings-depreciation+e_prime
                             seller_cih=savings+sell_value+e_prime-mortgage_withint
@@ -405,8 +405,8 @@ def solve_owners_NC(par, grids, j_index, k_index, noncoastal_stayer_inputs,nonco
        
     for h_index in range(grids.vH.size):
         h=grids.vH[h_index]         
-        sell_value=(1-par.dDelta-par.dKappa_sell)*h*dP_NC_prime   
-        depreciation=(par.dDelta)*h*dP_NC_prime        
+        sell_value=(1-par.dDelta-par.dTau_h-par.dKappa_sell)*h*dP_NC_prime   
+        depreciation=(par.dDelta+par.dTau_h)*h*dP_NC_prime        
         house_value=h*dP_NC_prime
 
         for l_index in range(grids.vL.size):

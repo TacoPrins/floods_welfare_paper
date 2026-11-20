@@ -16,10 +16,10 @@ def solve(par, grids, j_index, k_index, g_index, t_index, dP_C, dP_NC, dP_C_prim
 
     
     coastal_damage_frac=grids.vPi_S_median[t_index]*np.dot(grids.vPDF_z[1:],(1-grids.vZ[1:]))    
-    rental_price_c=par.dPsi+dP_C-(1-par.dDelta-coastal_damage_frac)/(1+par.r)*dP_C_prime 
+    rental_price_c=par.dPsi+dP_C-(1-par.dDelta-par.dTau_h-coastal_damage_frac)/(1+par.r)*dP_C_prime 
     g_renter_c=grids.vG[g_index]         
          
-    rental_price_nc=par.dPsi+dP_NC-(1-par.dDelta)/(1+par.r)*dP_NC_prime
+    rental_price_nc=par.dPsi+dP_NC-(1-par.dDelta-par.dTau_h)/(1+par.r)*dP_NC_prime
     g_renter_nc=1
 
     mVt_c, mQt_c, mB_pol_c, mVt_wf_c=renter_solver(par, grids, j_index, k_index, g_index, t_index, dP_C, dP_NC, dP_C_prime, dP_NC_prime, mW_next, mQ_next, mW_next_wf, rental_price_c, g_renter_c, config)
