@@ -29,8 +29,8 @@ def calc_moments(par, grids, t_index, mDist_c, mDist_nc,mDist_renter, vCoeff_C, 
     #(1-dPi_S)*((1-par.dDelta)/(1+par.r))*dP_C_prime_noflood)
     coastal_damage_frac=grids.vPi_S_median[t_index]*np.dot(grids.vPDF_z[1:],(1-grids.vZ[1:]))
     
-    rental_price_C=par.dPsi+dP_C-(1-par.dDelta-coastal_damage_frac)/(1+par.r)*dP_C_prime
-    rental_price_NC=par.dPsi+dP_NC-(1-par.dDelta)/(1+par.r)*dP_NC_prime
+    rental_price_C=par.dPsi+dP_C-(1-par.dDelta-par.dTau_h-coastal_damage_frac)/(1+par.r)*dP_C_prime
+    rental_price_NC=par.dPsi+dP_NC-(1-par.dDelta-par.dTau_h)/(1+par.r)*dP_NC_prime
     
     g_indiff=rental_price_C/rental_price_NC
     if grids.vG[0]<g_indiff and g_indiff<grids.vG[-1]:
