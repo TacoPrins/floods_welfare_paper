@@ -235,7 +235,7 @@ def plot_price_transition_exp(
 def rental_price(par, grids, t_index, P, P_prime, coastal):
     """User-cost rent given this period's price P and next period's price P_prime."""
     dmg = grids.vPi_S_median[t_index] * np.dot(grids.vPDF_z[1:], 1 - grids.vZ[1:]) if coastal else 0.0
-    return par.dPsi + max(P - (1 - par.dDelta - dmg) / (1 + par.r) * P_prime, 0)
+    return par.dPsi + max(P - (1 - par.dDelta - par.dTau_h - dmg) / (1 + par.r) * P_prime, 0)
 
 
 def rent_path(par, grids, vCoeff, coastal):
